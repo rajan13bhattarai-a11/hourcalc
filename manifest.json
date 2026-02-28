@@ -1,10 +1,10 @@
 {
-  "name": "Hour Calc",
+  "name": "HourCalc Pro",
   "short_name": "HourCalc",
   "start_url": "apple.html",
   "display": "standalone",
-  "background_color": "#0b0f17",
-  "theme_color": "#2b62ff",
+  "background_color": "#070b14",
+  "theme_color": "#0b1220",
   "icons": [
     { "src": "icon-192.png", "sizes": "192x192", "type": "image/png" },
     { "src": "icon-512.png", "sizes": "512x512", "type": "image/png" }
