@@ -16,13 +16,11 @@ body{
   color:white;
   text-align:center;
 }
-
 .container{
-  max-width:500px;
+  max-width:520px;
   margin:auto;
   padding:20px;
 }
-
 input, select, button{
   width:100%;
   padding:12px;
@@ -30,49 +28,95 @@ input, select, button{
   border-radius:10px;
   border:none;
   font-size:16px;
+  box-sizing:border-box;
 }
-
 button{
   background:#2b62ff;
   color:white;
+  cursor:pointer;
 }
-
 .result{
-  margin-top:20px;
+  margin-top:18px;
   font-size:20px;
   font-weight:bold;
+}
+.small{
+  font-size:14px;
+  opacity:0.85;
+  font-weight:normal;
+}
+hr{
+  border:0;
+  border-top:1px solid #22304f;
+  margin:16px 0;
+}
+.row3{
+  display:flex;
+  gap:10px;
+}
+.row3 > *{
+  flex:1;
 }
 </style>
 </head>
 
 <body>
-
 <div class="container">
-<h2>Hour Calculator (12 Hour Format)</h2>
+  <h2>Hour Calculator (12 Hour Format)</h2>
 
-<label>Start Time</label>
-<input id="startH" type="number" min="1" max="12" placeholder="Hour">
-<input id="startM" type="number" min="0" max="59" placeholder="Minute">
-<select id="startAP">
-<option>AM</option>
-<option>PM</option>
-</select>
+  <label>Start Time</label>
+  <div class="row3">
+    <input id="startH" type="number" min="1" max="12" value="9" placeholder="Hour">
+    <input id="startM" type="number" min="0" max="59" value="0" placeholder="Minute">
+    <select id="startAP">
+      <option>AM</option>
+      <option selected>PM</option>
+    </select>
+  </div>
 
-<label>End Time</label>
-<input id="endH" type="number" min="1" max="12" placeholder="Hour">
-<input id="endM" type="number" min="0" max="59" placeholder="Minute">
-<select id="endAP">
-<option>AM</option>
-<option>PM</option>
-</select>
+  <label>End Time</label>
+  <div class="row3">
+    <input id="endH" type="number" min="1" max="12" value="5" placeholder="Hour">
+    <input id="endM" type="number" min="0" max="59" value="0" placeholder="Minute">
+    <select id="endAP">
+      <option selected>PM</option>
+      <option>AM</option>
+    </select>
+  </div>
 
-<label>Break (minutes)</label>
-<input id="break" type="number" value="0">
+  <label>Break (minutes)</label>
+  <input id="break" type="number" value="0" min="0">
 
-<button onclick="calculate()">Calculate Hours</button>
+  <label>Did you take break before 6:30 PM?</label>
+  <select id="breakBeforeLoading">
+    <option value="yes" selected>Yes</option>
+    <option value="no">No</option>
+  </select>
 
-<div class="result" id="result">---</div>
+  <hr>
 
+  <h3 style="margin:10px 0;">Pay Settings</h3>
+
+  <label>Base pay rate ($/hour)</label>
+  <input id="baseRate" type="number" value="30" step="0.01" min="0">
+
+  <label>Loading pay rate ($/hour) — after 6:30 PM</label>
+  <input id="loadingRate" type="number" value="36" step="0.01" min="0">
+
+  <label>Loading starts at</label>
+  <div class="row3">
+    <input id="loadH" type="number" min="1" max="12" value="6" placeholder="Hour">
+    <input id="loadM" type="number" min="0" max="59" value="30" placeholder="Minute">
+    <select id="loadAP">
+      <option>AM</option>
+      <option selected>PM</option>
+    </select>
+  </div>
+
+  <button onclick="calculate()">Calculate Hours & Pay</button>
+
+  <div class="result" id="result">---</div>
+  <div class="result small" id="payBreakdown"></div>
 </div>
 
 <script src="app.js"></script>
