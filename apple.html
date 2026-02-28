@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hour Calc</title>
+
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#2b62ff">
+
+<style>
+body{
+  margin:0;
+  font-family:Arial, sans-serif;
+  background:#0b0f17;
+  color:white;
+  text-align:center;
+}
+
+.container{
+  max-width:500px;
+  margin:auto;
+  padding:20px;
+}
+
+input, select, button{
+  width:100%;
+  padding:12px;
+  margin:8px 0;
+  border-radius:10px;
+  border:none;
+  font-size:16px;
+}
+
+button{
+  background:#2b62ff;
+  color:white;
+}
+
+.result{
+  margin-top:20px;
+  font-size:20px;
+  font-weight:bold;
+}
+</style>
+</head>
+
+<body>
+
+<div class="container">
+<h2>Hour Calculator (12 Hour Format)</h2>
+
+<label>Start Time</label>
+<input id="startH" type="number" min="1" max="12" placeholder="Hour">
+<input id="startM" type="number" min="0" max="59" placeholder="Minute">
+<select id="startAP">
+<option>AM</option>
+<option>PM</option>
+</select>
+
+<label>End Time</label>
+<input id="endH" type="number" min="1" max="12" placeholder="Hour">
+<input id="endM" type="number" min="0" max="59" placeholder="Minute">
+<select id="endAP">
+<option>AM</option>
+<option>PM</option>
+</select>
+
+<label>Break (minutes)</label>
+<input id="break" type="number" value="0">
+
+<button onclick="calculate()">Calculate Hours</button>
+
+<div class="result" id="result">---</div>
+
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
