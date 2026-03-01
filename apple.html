@@ -78,9 +78,10 @@
       overflow:hidden;
     }
     .cardHd{
-      padding:14px 14px 10px;
-      border-bottom:1px solid rgba(34,48,79,.7);
-      display:flex; align-items:center; justify-content:space-between; gap:10px;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+}
     }
     .cardHd h2{margin:0; font-size:14px}
     .cardBd{padding:14px}
@@ -178,6 +179,16 @@
       text-decoration: underline;
       cursor:pointer;
     }
+/* PDF/Print styling */
+@media print {
+  header, .footerActions, .toast, .smallLink { display: none !important; }
+  body { background: #fff !important; color: #000 !important; }
+  .wrap { max-width: none !important; padding: 0 !important; }
+  .grid { display: block !important; }
+  .card { box-shadow: none !important; border: 1px solid #ccc !important; }
+  .cardHd { border-bottom: 1px solid #ccc !important; }
+  .cardBd { padding: 12px !important; }
+}
   </style>
 </head>
 <body>
@@ -188,15 +199,14 @@
       <div class="brand">
         <div class="logo"></div>
         <div>
-          <h1>HourCalc Pro</h1>
-          <div class="subtitle">12-hour shifts • 6:30 PM loading • auto-save • weekly totals</div>
+          <h1>Hour Calculation Pro</h1>
+          
         </div>
       </div>
 
       <div class="chiprow">
         <div class="chip">Base: <b id="chipBase">26.9797</b>/hr</div>
-        <div class="chip">Loading: <b>+25%</b> after <b>6:30 PM</b></div>
-        <div class="chip">Offline ready</div>
+    
       </div>
     </div>
   </div>
@@ -207,16 +217,13 @@
     <!-- LEFT: shifts + settings -->
     <section class="card">
       <div class="cardHd">
-        <h2>Shifts</h2>
-        <button class="btn btnPrimary" id="btnAddShift" type="button">+ Add Shift</button>
-      </div>
-      <div class="cardBd">
-        <div class="muted">
-          Add one or more shifts. Overnight shifts are supported (e.g., 10 PM → 6 AM).
-          Your entries auto-save.
+        
+      <div class="cardHd">
+  <h2>Hour Calculation</h2>
+</div>
         </div>
 
-        <div class="hr"></div>
+        
 
         <div class="row">
           <div>
@@ -229,15 +236,7 @@
           </div>
         </div>
 
-        <label>Loading starts at</label>
-        <div class="row3">
-          <input id="loadH" type="number" min="1" max="12" value="6" />
-          <input id="loadM" type="number" min="0" max="59" value="30" />
-          <select id="loadAP">
-            <option>AM</option>
-            <option selected>PM</option>
-          </select>
-        </div>
+        <!-- ✅ REMOVED: Loading time inputs (loading is fixed at 6:30 PM in app.js) -->
 
         <div class="hr"></div>
 
@@ -245,7 +244,7 @@
 
         <div class="footerActions">
           <button class="btn btnPrimary" id="btnCalculate" type="button">Calculate Total</button>
-          <button class="btn" id="btnExportCSV" type="button">Export CSV</button>
+          <button class="btn" id="btnExportCSV" type="button">Export PDF</button>
           <button class="btn btnDanger" id="btnReset" type="button">Reset Week</button>
         </div>
 
@@ -272,12 +271,14 @@
         <div class="hr"></div>
 
         <div class="kv"><span>Base rate</span><b id="sumBaseRate">$0.00/hr</b></div>
-        <div class="kv"><span>Loading rate (+25%)</span><b id="sumLoadingRate">$0.00/hr</b></div>
+        <div class="kv"><span>Loading rate (+25% Weekdays)</span><b id="sumLoadingRate">$0.00/hr</b></div>
+ <div class="kv"><span> Saturday Loading rate (+25% All day)</b></div>
+<div class="kv"><span> Sunday Loading rate (+50% All day)</b></div>
 
         <div class="hr"></div>
 
         <div class="muted">
-          Tip: If the app shows old version after updating GitHub,
+          Tip: If the app shows old version,
           open the app link once in browser or clear site data.
           <span class="smallLink" id="btnShowLink">Show app link</span>
         </div>

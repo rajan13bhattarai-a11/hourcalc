@@ -1,22 +1,25 @@
 // HourCalc Pro
 // Rules:
 // - Base rate default: 26.9797
-// - Loading: +25% after loadingStart (default 6:30 PM)
-// - Per shift: break minutes + dropdown "break before loading?" yes/no
+// - Weekdays: +25% after loadingStart (FIXED 6:30 PM)
+// - Saturday: +25% ALL DAY
+// - Sunday: +50% ALL DAY
+// - DM = Yes → different base rate ($30.3329) for that shift/day (silent; not shown in UI)
+// - Per shift: break minutes + dropdown "break before loading?" yes/no (weekdays only)
 // - Auto-save to localStorage
-// - Multiple shifts + weekly totals + export CSV
+// - Export PDF uses browser print (Save as PDF)
 
 const DEFAULTS = {
   baseRate: 26.9797,
-  loadingPct: 0.25,
+  // kept for backward-compat with existing localStorage (even if UI removed)
   loadH: 6,
   loadM: 30,
   loadAP: "PM",
   weekLabel: "",
   shifts: [
-    // default example shift
     {
-      name: "Shift 1",
+      name: "Monday",
+      didDM: "no",
       sh: 9, sm: 0, sap: "AM",
       eh: 5, em: 0, eap: "PM",
       breakMin: 0,
@@ -27,19 +30,33 @@ const DEFAULTS = {
 
 const LS_KEY = "hourcalc_pro_v1";
 
+// loading percentages
+const WEEKDAY_LOADING_PCT = 0.25;
+const SAT_LOADING_PCT = 0.25;
+const SUN_LOADING_PCT = 0.50;
+
+// DM base rate (silent)
+const DM_BASE_RATE = 30.3329;
+
+// FIXED loading start time: 6:30 PM (weekdays only)
+const FIXED_LOAD_START = { h: 6, m: 30, ap: "PM" };
+
 const $ = (id) => document.getElementById(id);
 
 const el = {
   chipBase: $("chipBase"),
   weekLabel: $("weekLabel"),
   baseRate: $("baseRate"),
+
+  // these may not exist anymore; keep safe
   loadH: $("loadH"),
   loadM: $("loadM"),
   loadAP: $("loadAP"),
+
   shiftList: $("shiftList"),
-  btnAddShift: $("btnAddShift"),
+  btnAddShift: $("btnAddShift"), // may not exist now (safe)
   btnCalculate: $("btnCalculate"),
-  btnExportCSV: $("btnExportCSV"),
+  btnExportCSV: $("btnExportCSV"), // now used as Export PDF
   btnReset: $("btnReset"),
   toast: $("toast"),
   pillStatus: $("pillStatus"),
@@ -86,11 +103,24 @@ function money(n) {
   return `$${Number(n).toFixed(2)}`;
 }
 
-// Split minutes into normal/loading for a single-day segment [start..end) where both are within 0..1440
+// Split minutes into normal/loading for a single-day segment [start..end) within 0..1440
 function splitByLoading(startMin, endMin, loadingStartMin) {
   if (endMin <= loadingStartMin) return { normal: endMin - startMin, loading: 0 };
   if (startMin >= loadingStartMin) return { normal: 0, loading: endMin - startMin };
   return { normal: loadingStartMin - startMin, loading: endMin - loadingStartMin };
+}
+
+// -------- day helpers ----------
+function normDayName(v) {
+  return String(v || "").trim().toLowerCase();
+}
+function dayFlags(dayName) {
+  const d = normDayName(dayName);
+  return {
+    isSaturday: d === "saturday",
+    isSunday: d === "sunday",
+    isWeekend: d === "saturday" || d === "sunday"
+  };
 }
 
 // ---------- state ----------
@@ -100,17 +130,19 @@ function loadState() {
     if (!raw) return structuredClone(DEFAULTS);
     const parsed = JSON.parse(raw);
 
-    // merge defaults safely
     const merged = structuredClone(DEFAULTS);
     merged.baseRate = Number(parsed.baseRate ?? merged.baseRate);
+
     merged.loadH = Number(parsed.loadH ?? merged.loadH);
     merged.loadM = Number(parsed.loadM ?? merged.loadM);
     merged.loadAP = String(parsed.loadAP ?? merged.loadAP);
+
     merged.weekLabel = String(parsed.weekLabel ?? merged.weekLabel);
 
     if (Array.isArray(parsed.shifts) && parsed.shifts.length) {
       merged.shifts = parsed.shifts.map((s, i) => ({
         name: String(s.name ?? `Shift ${i + 1}`),
+        didDM: (String(s.didDM || "").toLowerCase() === "yes") ? "yes" : "no",
         sh: Number(s.sh ?? 9), sm: Number(s.sm ?? 0), sap: String(s.sap ?? "AM"),
         eh: Number(s.eh ?? 5), em: Number(s.em ?? 0), eap: String(s.eap ?? "PM"),
         breakMin: Math.max(0, Number(s.breakMin ?? 0)),
@@ -131,6 +163,7 @@ function saveState() {
 }
 
 function showToast(msg) {
+  if (!el.toast) return;
   el.toast.textContent = msg;
   el.toast.classList.add("show");
   if (toastTimer) clearTimeout(toastTimer);
@@ -138,19 +171,23 @@ function showToast(msg) {
 }
 
 function setStatus(text) {
+  if (!el.pillStatus) return;
   el.pillStatus.textContent = text;
 }
 
 // ---------- UI render ----------
 function render() {
-  el.weekLabel.value = state.weekLabel || "";
-  el.baseRate.value = String(state.baseRate);
-  el.loadH.value = String(state.loadH);
-  el.loadM.value = String(state.loadM);
-  el.loadAP.value = state.loadAP;
+  if (el.weekLabel) el.weekLabel.value = state.weekLabel || "";
+  if (el.baseRate) el.baseRate.value = String(state.baseRate);
 
-  el.chipBase.textContent = String(state.baseRate);
+  // keep stable if still present
+  if (el.loadH) el.loadH.value = String(state.loadH);
+  if (el.loadM) el.loadM.value = String(state.loadM);
+  if (el.loadAP) el.loadAP.value = state.loadAP;
 
+  if (el.chipBase) el.chipBase.textContent = String(state.baseRate);
+
+  if (!el.shiftList) return;
   el.shiftList.innerHTML = "";
   state.shifts.forEach((s, idx) => {
     el.shiftList.appendChild(renderShiftCard(s, idx));
@@ -166,13 +203,28 @@ function renderShiftCard(s, idx) {
     <div class="shiftTop">
       <div>
         <div class="shiftTitle">${escapeHtml(s.name || `Shift ${idx + 1}`)}</div>
-        <div class="mini">Break + loading split per shift</div>
       </div>
       <button class="btn btnDanger" type="button" data-action="remove">Remove</button>
     </div>
 
-    <label>Shift name</label>
-    <input data-k="name" value="${escapeAttr(s.name)}" placeholder="Example: Monday night" />
+    <div class="row" style="margin-top:6px">
+      <div>
+        <label>Day</label>
+        <select data-k="name">
+          ${["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"].map(d =>
+            `<option value="${d}" ${String(s.name)===d?"selected":""}>${d}</option>`
+          ).join("")}
+        </select>
+      </div>
+
+      <div>
+        <label>Did you do DM?</label>
+        <select data-k="didDM">
+          <option value="no" ${s.didDM==="no"?"selected":""}>No</option>
+          <option value="yes" ${s.didDM==="yes"?"selected":""}>Yes</option>
+        </select>
+      </div>
+    </div>
 
     <div class="row" style="margin-top:6px">
       <div>
@@ -213,9 +265,13 @@ function renderShiftCard(s, idx) {
         </select>
       </div>
     </div>
+
+    <div style="margin-top:12px">
+      <button class="btn btnPrimary" type="button" data-action="addShift">+ Add Shift</button>
+    </div>
   `;
 
-  // Input handling (delegate per card)
+  // input handling
   wrap.addEventListener("input", (e) => {
     const t = e.target;
     const k = t?.dataset?.k;
@@ -226,6 +282,7 @@ function renderShiftCard(s, idx) {
     if (!shift) return;
 
     if (k === "name") shift.name = t.value;
+    if (k === "didDM") shift.didDM = (t.value === "yes") ? "yes" : "no";
     if (k === "sh") shift.sh = Number(t.value || 0);
     if (k === "sm") shift.sm = Number(t.value || 0);
     if (k === "sap") shift.sap = t.value;
@@ -238,15 +295,27 @@ function renderShiftCard(s, idx) {
     saveState();
   });
 
+  // click handling: remove shift / add shift
   wrap.addEventListener("click", (e) => {
-    const btn = e.target.closest("button[data-action='remove']");
-    if (!btn) return;
-    const i = Number(wrap.dataset.index);
-    state.shifts.splice(i, 1);
-    if (state.shifts.length === 0) state.shifts.push(structuredClone(DEFAULTS.shifts[0]));
-    saveState();
-    render();
-    setStatus("Shift removed");
+    const removeBtn = e.target.closest("button[data-action='remove']");
+    if (removeBtn) {
+      const i = Number(wrap.dataset.index);
+      state.shifts.splice(i, 1);
+      if (state.shifts.length === 0) state.shifts.push(structuredClone(DEFAULTS.shifts[0]));
+      saveState();
+      render();
+      setStatus("Shift removed");
+      return;
+    }
+
+    const addBtn = e.target.closest("button[data-action='addShift']");
+    if (addBtn) {
+      state.shifts.push(structuredClone(DEFAULTS.shifts[0]));
+      saveState();
+      render();
+      setStatus("Shift added");
+      return;
+    }
   });
 
   return wrap;
@@ -257,23 +326,22 @@ function escapeHtml(s) {
     "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"
   }[c]));
 }
-function escapeAttr(s) {
-  return escapeHtml(s).replace(/"/g, "&quot;");
-}
 
 // ---------- calculation ----------
 function calculateTotals() {
-  const baseRate = Math.max(0, Number(el.baseRate.value || DEFAULTS.baseRate));
-  const loadingPct = DEFAULTS.loadingPct;
+  const baseRateUI = Math.max(0, Number(el.baseRate?.value || DEFAULTS.baseRate));
 
-  const loadStart = toMinutes12(el.loadH.value, el.loadM.value, el.loadAP.value);
+  const loadStart = toMinutes12(FIXED_LOAD_START.h, FIXED_LOAD_START.m, FIXED_LOAD_START.ap);
   if (loadStart === null) {
     setStatus("Fix loading time");
-    return { ok:false, err:"Invalid loading start time" };
+    return { ok:false, err:"Invalid fixed loading start time" };
   }
 
   let totalNormalMins = 0;
   let totalLoadingMins = 0;
+
+  let totalNormalPay = 0;
+  let totalLoadingPay = 0;
 
   const perShift = [];
 
@@ -289,13 +357,25 @@ function calculateTotals() {
     let end = end0;
     if (end < start) end += 1440; // overnight
 
-    // Split into normal/loading across day boundary if needed
+    const { isSaturday, isSunday, isWeekend } = dayFlags(s.name);
+    const loadingPct = isSunday ? SUN_LOADING_PCT : (isSaturday ? SAT_LOADING_PCT : WEEKDAY_LOADING_PCT);
+
+    const effectiveBaseRate =
+      (String(s.didDM || "").toLowerCase() === "yes") ? DM_BASE_RATE : baseRateUI;
+
     let normalM = 0, loadingM = 0;
 
     function processSegment(segStart, segEnd, dayOffset) {
-      const split = splitByLoading(segStart - dayOffset, segEnd - dayOffset, loadStart);
-      normalM += split.normal;
-      loadingM += split.loading;
+      const a = segStart - dayOffset;
+      const b = segEnd - dayOffset;
+
+      if (isWeekend) {
+        loadingM += (b - a);
+      } else {
+        const split = splitByLoading(a, b, loadStart);
+        normalM += split.normal;
+        loadingM += split.loading;
+      }
     }
 
     if (end <= 1440) {
@@ -305,16 +385,23 @@ function calculateTotals() {
       processSegment(1440, end, 1440);
     }
 
-    // Apply break based on dropdown
     const breakMin = Math.max(0, Number(s.breakMin || 0));
-    if (s.breakBeforeLoading === "yes") {
-      normalM = Math.max(0, normalM - breakMin);
-    } else {
+    if (isWeekend) {
       loadingM = Math.max(0, loadingM - breakMin);
+    } else {
+      if (s.breakBeforeLoading === "yes") {
+        normalM = Math.max(0, normalM - breakMin);
+      } else {
+        loadingM = Math.max(0, loadingM - breakMin);
+      }
     }
 
     totalNormalMins += normalM;
     totalLoadingMins += loadingM;
+
+    const shiftLoadingRate = effectiveBaseRate * (1 + loadingPct);
+    totalNormalPay += (normalM / 60) * effectiveBaseRate;
+    totalLoadingPay += (loadingM / 60) * shiftLoadingRate;
 
     perShift.push({
       name: s.name || `Shift ${i+1}`,
@@ -325,16 +412,13 @@ function calculateTotals() {
     });
   }
 
-  const loadingRate = baseRate * (1 + loadingPct);
-
-  const normalPay = (totalNormalMins / 60) * baseRate;
-  const loadingPay = (totalLoadingMins / 60) * loadingRate;
+  const normalPay = totalNormalPay;
+  const loadingPay = totalLoadingPay;
   const totalPay = normalPay + loadingPay;
 
   return {
     ok:true,
-    baseRate,
-    loadingRate,
+    baseRate: baseRateUI,
     normalMins: totalNormalMins,
     loadingMins: totalLoadingMins,
     totalMins: totalNormalMins + totalLoadingMins,
@@ -348,137 +432,109 @@ function calculateTotals() {
 function updateSummary(out) {
   if (!out.ok) {
     setStatus("Error");
-    el.sumTotalPay.textContent = "$0.00";
-    el.sumSubtitle.textContent = out.err || "Fix inputs and try again.";
+    if (el.sumTotalPay) el.sumTotalPay.textContent = "$0.00";
+    if (el.sumSubtitle) el.sumSubtitle.textContent = out.err || "Fix inputs and try again.";
     return;
   }
 
   setStatus("Calculated");
-  el.sumTotalPay.textContent = money(out.totalPay);
+  if (el.sumTotalPay) el.sumTotalPay.textContent = money(out.totalPay);
 
-  const label = (el.weekLabel.value || "").trim();
+  const label = (el.weekLabel?.value || "").trim();
   const labelText = label ? `Week: ${label} • ` : "";
-  el.sumSubtitle.textContent = `${labelText}${state.shifts.length} shift(s) • Normal + Loading totals`;
-
-  el.sumTotalHours.textContent = fmtHM(out.totalMins);
-  el.sumNormalHours.textContent = fmtHM(out.normalMins);
-  el.sumLoadingHours.textContent = fmtHM(out.loadingMins);
-
-  el.sumBaseRate.textContent = `${money(out.baseRate)}/hr`;
-  el.sumLoadingRate.textContent = `${money(out.loadingRate)}/hr`;
-}
-
-// ---------- CSV export ----------
-function exportCSV(out) {
-  if (!out.ok) {
-    alert(out.err || "Fix inputs first.");
-    return;
+  if (el.sumSubtitle) {
+    el.sumSubtitle.textContent = `${labelText}${state.shifts.length} shift(s)`;
   }
 
-  const rows = [];
-  rows.push(["WeekLabel", (el.weekLabel.value || "").trim()]);
-  rows.push(["BaseRate", out.baseRate]);
-  rows.push(["LoadingRate", out.loadingRate]);
-  rows.push([]);
-  rows.push(["ShiftName", "NormalMins", "LoadingMins", "TotalMins", "BreakMins"]);
+  if (el.sumTotalHours) el.sumTotalHours.textContent = fmtHM(out.totalMins);
+  if (el.sumNormalHours) el.sumNormalHours.textContent = fmtHM(out.normalMins);
+  if (el.sumLoadingHours) el.sumLoadingHours.textContent = fmtHM(out.loadingMins);
 
-  out.perShift.forEach(s => {
-    rows.push([s.name, s.normalMins, s.loadingMins, s.totalMins, s.breakMin]);
-  });
+  if (el.sumBaseRate) el.sumBaseRate.textContent = `${money(out.baseRate)}/hr`;
 
-  rows.push([]);
-  rows.push(["Totals", out.normalMins, out.loadingMins, out.totalMins, ""]);
-  rows.push(["PayNormal", out.normalPay]);
-  rows.push(["PayLoading", out.loadingPay]);
-  rows.push(["PayTotal", out.totalPay]);
-
-  const csv = rows.map(r => r.map(v => {
-    const s = String(v ?? "");
-    // escape
-    if (/[",\n]/.test(s)) return `"${s.replace(/"/g,'""')}"`;
-    return s;
-  }).join(",")).join("\n");
-
-  const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
-  const url = URL.createObjectURL(blob);
-
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = `HourCalc_${(labelSafe(el.weekLabel.value) || "week")}.csv`;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(url);
-
-  setStatus("CSV exported");
-}
-function labelSafe(s){
-  return String(s || "").trim().replace(/[^\w\-]+/g, "_").slice(0,40);
+  if (el.sumLoadingRate) {
+    el.sumLoadingRate.innerHTML =
+      `<span style="opacity:.75;font-size:.9em;font-weight:400;">Loading starts from 6:30 PM on Weekdays</span>`;
+  }
 }
 
 // ---------- events ----------
 function wire() {
-  // initial inputs
-  el.weekLabel.addEventListener("input", () => { state.weekLabel = el.weekLabel.value; saveState(); });
-  el.baseRate.addEventListener("input", () => {
-    state.baseRate = Number(el.baseRate.value || DEFAULTS.baseRate);
-    el.chipBase.textContent = String(state.baseRate);
+  el.weekLabel?.addEventListener("input", () => {
+    state.weekLabel = el.weekLabel.value;
     saveState();
   });
 
+  el.baseRate?.addEventListener("input", () => {
+    state.baseRate = Number(el.baseRate.value || DEFAULTS.baseRate);
+    if (el.chipBase) el.chipBase.textContent = String(state.baseRate);
+    saveState();
+  });
+
+  // (Optional) old loading inputs, only if present
   const onLoadTime = () => {
-    state.loadH = Number(el.loadH.value || DEFAULTS.loadH);
-    state.loadM = Number(el.loadM.value || DEFAULTS.loadM);
-    state.loadAP = el.loadAP.value || DEFAULTS.loadAP;
+    state.loadH = Number((el.loadH?.value) || DEFAULTS.loadH);
+    state.loadM = Number((el.loadM?.value) || DEFAULTS.loadM);
+    state.loadAP = (el.loadAP?.value) || DEFAULTS.loadAP;
     saveState();
   };
-  el.loadH.addEventListener("input", onLoadTime);
-  el.loadM.addEventListener("input", onLoadTime);
-  el.loadAP.addEventListener("change", onLoadTime);
+  el.loadH?.addEventListener("input", onLoadTime);
+  el.loadM?.addEventListener("input", onLoadTime);
+  el.loadAP?.addEventListener("change", onLoadTime);
 
-  el.btnAddShift.addEventListener("click", () => {
-    const n = state.shifts.length + 1;
-    state.shifts.push({
-      name: `Shift ${n}`,
-      sh: 9, sm: 0, sap: "AM",
-      eh: 5, em: 0, eap: "PM",
-      breakMin: 0,
-      breakBeforeLoading: "yes"
+  // If you still have a top add button, wire it safely
+  if (el.btnAddShift) {
+    el.btnAddShift.addEventListener("click", () => {
+      state.shifts.push(structuredClone(DEFAULTS.shifts[0]));
+      saveState();
+      render();
+      setStatus("Shift added");
     });
-    saveState();
-    render();
-    setStatus("Shift added");
-  });
+  }
 
-  el.btnCalculate.addEventListener("click", () => {
-    // keep state in sync
-    state.weekLabel = el.weekLabel.value;
-    state.baseRate = Number(el.baseRate.value || DEFAULTS.baseRate);
-    state.loadH = Number(el.loadH.value || DEFAULTS.loadH);
-    state.loadM = Number(el.loadM.value || DEFAULTS.loadM);
-    state.loadAP = el.loadAP.value || DEFAULTS.loadAP;
+  el.btnCalculate?.addEventListener("click", () => {
+    state.weekLabel = el.weekLabel?.value || "";
+    state.baseRate = Number(el.baseRate?.value || DEFAULTS.baseRate);
+
+    // force fixed loading time into state
+    state.loadH = FIXED_LOAD_START.h;
+    state.loadM = FIXED_LOAD_START.m;
+    state.loadAP = FIXED_LOAD_START.ap;
+
     saveState();
 
     const out = calculateTotals();
     updateSummary(out);
   });
 
-  el.btnExportCSV.addEventListener("click", () => {
-    const out = calculateTotals();
-    exportCSV(out);
+  // Export PDF (button id is still btnExportCSV in your HTML)
+  el.btnExportCSV?.addEventListener("click", () => {
+    window.print(); // user chooses "Save as PDF"
+    setStatus("Print dialog opened");
   });
 
-  el.btnReset.addEventListener("click", () => {
+  el.btnReset?.addEventListener("click", () => {
     if (!confirm("Reset the entire week? This clears all shifts.")) return;
+
     state = structuredClone(DEFAULTS);
+    state.loadH = FIXED_LOAD_START.h;
+    state.loadM = FIXED_LOAD_START.m;
+    state.loadAP = FIXED_LOAD_START.ap;
+
     saveState();
     render();
-    updateSummary({ ok:true, baseRate: state.baseRate, loadingRate: state.baseRate*(1+DEFAULTS.loadingPct),
-      normalMins:0, loadingMins:0, totalMins:0, normalPay:0, loadingPay:0, totalPay:0, perShift:[]});
+
+    updateSummary({
+      ok:true,
+      baseRate: state.baseRate,
+      normalMins:0, loadingMins:0, totalMins:0,
+      normalPay:0, loadingPay:0, totalPay:0, perShift:[]
+    });
+
     setStatus("Reset");
   });
 
-  el.btnShowLink.addEventListener("click", () => {
+  el.btnShowLink?.addEventListener("click", () => {
     const url = `${location.origin}${location.pathname}`.replace(/\/[^/]*$/, "/apple.html");
     alert(url);
   });
@@ -486,18 +542,23 @@ function wire() {
 
 // ---------- init ----------
 function init() {
-  // bind defaults to UI
+  // ensure fixed load time always
+  state.loadH = FIXED_LOAD_START.h;
+  state.loadM = FIXED_LOAD_START.m;
+  state.loadAP = FIXED_LOAD_START.ap;
+
   render();
-  // show last known summary quickly
-  updateSummary({ ok:true, baseRate: state.baseRate, loadingRate: state.baseRate*(1+DEFAULTS.loadingPct),
-    normalMins:0, loadingMins:0, totalMins:0, normalPay:0, loadingPay:0, totalPay:0, perShift:[] });
+
+  updateSummary({
+    ok:true,
+    baseRate: state.baseRate,
+    normalMins:0, loadingMins:0, totalMins:0,
+    normalPay:0, loadingPay:0, totalPay:0, perShift:[]
+  });
+
   setStatus("Ready");
   wire();
 
-  // set base rate chip
-  el.chipBase.textContent = String(state.baseRate);
-
-  // service worker
   if ("serviceWorker" in navigator) {
     window.addEventListener("load", () => {
       navigator.serviceWorker.register("./sw.js").catch(()=>{});
