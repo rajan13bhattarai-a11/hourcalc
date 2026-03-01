@@ -5,7 +5,11 @@
 // - Saturday: +25% ALL DAY
 // - Sunday: +50% ALL DAY
 // - DM = Yes → different base rate ($30.3329) for that shift/day (silent; not shown in UI)
-// - Per shift: break minutes + dropdown "break before loading?" yes/no (weekdays only)
+// - Break is FULLY AUTO (NO MANUAL OVERRIDE):
+//      ≤ 300 min -> 0
+//      301–600   -> 30
+//      ≥ 601     -> 60
+// - Per shift: dropdown "break before loading?" yes/no (weekdays only)
 // - Auto-save to localStorage
 // - Export PDF uses browser print (Save as PDF)
 
@@ -110,6 +114,29 @@ function splitByLoading(startMin, endMin, loadingStartMin) {
   return { normal: loadingStartMin - startMin, loading: endMin - loadingStartMin };
 }
 
+// -------- AUTO BREAK (NO MANUAL OVERRIDE) ----------
+function calcDurationMins(startMin, endMin) {
+  let d = endMin - startMin;
+  if (d < 0) d += 1440; // overnight
+  return d;
+}
+function autoBreakFromDuration(durationMins) {
+  // FINAL RULES:
+  // ≤ 300 -> 0
+  // 301–600 -> 30
+  // ≥ 601 -> 60
+  if (durationMins <= 300) return 0;
+  if (durationMins <= 600) return 30;
+  return 60;
+}
+function computeAutoBreakForShift(shift) {
+  const start = toMinutes12(shift.sh, shift.sm, shift.sap);
+  const end = toMinutes12(shift.eh, shift.em, shift.eap);
+  if (start === null || end === null) return 0;
+  const dur = calcDurationMins(start, end);
+  return autoBreakFromDuration(dur);
+}
+
 // -------- day helpers ----------
 function normDayName(v) {
   return String(v || "").trim().toLowerCase();
@@ -140,14 +167,20 @@ function loadState() {
     merged.weekLabel = String(parsed.weekLabel ?? merged.weekLabel);
 
     if (Array.isArray(parsed.shifts) && parsed.shifts.length) {
-      merged.shifts = parsed.shifts.map((s, i) => ({
-        name: String(s.name ?? `Shift ${i + 1}`),
-        didDM: (String(s.didDM || "").toLowerCase() === "yes") ? "yes" : "no",
-        sh: Number(s.sh ?? 9), sm: Number(s.sm ?? 0), sap: String(s.sap ?? "AM"),
-        eh: Number(s.eh ?? 5), em: Number(s.em ?? 0), eap: String(s.eap ?? "PM"),
-        breakMin: Math.max(0, Number(s.breakMin ?? 0)),
-        breakBeforeLoading: (s.breakBeforeLoading === "no") ? "no" : "yes"
-      }));
+      merged.shifts = parsed.shifts.map((s, i) => {
+        const shObj = {
+          name: String(s.name ?? `Shift ${i + 1}`),
+          didDM: (String(s.didDM || "").toLowerCase() === "yes") ? "yes" : "no",
+          sh: Number(s.sh ?? 9), sm: Number(s.sm ?? 0), sap: String(s.sap ?? "AM"),
+          eh: Number(s.eh ?? 5), em: Number(s.em ?? 0), eap: String(s.eap ?? "PM"),
+          breakMin: Math.max(0, Number(s.breakMin ?? 0)),
+          breakBeforeLoading: (s.breakBeforeLoading === "no") ? "no" : "yes"
+        };
+
+        // Force auto-break on load (no manual override)
+        shObj.breakMin = computeAutoBreakForShift(shObj);
+        return shObj;
+      });
     }
 
     return merged;
@@ -190,8 +223,13 @@ function render() {
   if (!el.shiftList) return;
   el.shiftList.innerHTML = "";
   state.shifts.forEach((s, idx) => {
+    // Always enforce auto-break during render too
+    s.breakMin = computeAutoBreakForShift(s);
     el.shiftList.appendChild(renderShiftCard(s, idx));
   });
+
+  // save once after render to persist enforced breaks
+  saveState();
 }
 
 function renderShiftCard(s, idx) {
@@ -255,7 +293,7 @@ function renderShiftCard(s, idx) {
     <div class="row" style="margin-top:6px">
       <div>
         <label>Break (minutes)</label>
-        <input data-k="breakMin" type="number" min="0" value="${s.breakMin}">
+        <input data-k="breakMin" type="number" min="0" value="${s.breakMin}" readonly style="opacity:.85;cursor:not-allowed;">
       </div>
       <div>
         <label>Did you take break before loading time?</label>
@@ -281,6 +319,12 @@ function renderShiftCard(s, idx) {
     const shift = state.shifts[i];
     if (!shift) return;
 
+    // HARD BLOCK manual break edits
+    if (k === "breakMin") {
+      t.value = shift.breakMin;
+      return;
+    }
+
     if (k === "name") shift.name = t.value;
     if (k === "didDM") shift.didDM = (t.value === "yes") ? "yes" : "no";
     if (k === "sh") shift.sh = Number(t.value || 0);
@@ -289,8 +333,15 @@ function renderShiftCard(s, idx) {
     if (k === "eh") shift.eh = Number(t.value || 0);
     if (k === "em") shift.em = Number(t.value || 0);
     if (k === "eap") shift.eap = t.value;
-    if (k === "breakMin") shift.breakMin = Math.max(0, Number(t.value || 0));
     if (k === "breakBeforeLoading") shift.breakBeforeLoading = (t.value === "no") ? "no" : "yes";
+
+    // AUTO BREAK updates whenever time changes
+    const timeKeys = new Set(["sh","sm","sap","eh","em","eap"]);
+    if (timeKeys.has(k)) {
+      shift.breakMin = computeAutoBreakForShift(shift);
+      const breakInput = wrap.querySelector('input[data-k="breakMin"]');
+      if (breakInput) breakInput.value = shift.breakMin;
+    }
 
     saveState();
   });
@@ -302,6 +353,8 @@ function renderShiftCard(s, idx) {
       const i = Number(wrap.dataset.index);
       state.shifts.splice(i, 1);
       if (state.shifts.length === 0) state.shifts.push(structuredClone(DEFAULTS.shifts[0]));
+      // enforce auto-break on the new default row too
+      state.shifts[state.shifts.length - 1].breakMin = computeAutoBreakForShift(state.shifts[state.shifts.length - 1]);
       saveState();
       render();
       setStatus("Shift removed");
@@ -310,7 +363,9 @@ function renderShiftCard(s, idx) {
 
     const addBtn = e.target.closest("button[data-action='addShift']");
     if (addBtn) {
-      state.shifts.push(structuredClone(DEFAULTS.shifts[0]));
+      const newShift = structuredClone(DEFAULTS.shifts[0]);
+      newShift.breakMin = computeAutoBreakForShift(newShift);
+      state.shifts.push(newShift);
       saveState();
       render();
       setStatus("Shift added");
@@ -347,6 +402,9 @@ function calculateTotals() {
 
   for (let i = 0; i < state.shifts.length; i++) {
     const s = state.shifts[i];
+
+    // enforce auto-break at calculation time (just in case)
+    s.breakMin = computeAutoBreakForShift(s);
 
     const start = toMinutes12(s.sh, s.sm, s.sap);
     const end0  = toMinutes12(s.eh, s.em, s.eap);
@@ -485,7 +543,9 @@ function wire() {
   // If you still have a top add button, wire it safely
   if (el.btnAddShift) {
     el.btnAddShift.addEventListener("click", () => {
-      state.shifts.push(structuredClone(DEFAULTS.shifts[0]));
+      const newShift = structuredClone(DEFAULTS.shifts[0]);
+      newShift.breakMin = computeAutoBreakForShift(newShift);
+      state.shifts.push(newShift);
       saveState();
       render();
       setStatus("Shift added");
@@ -500,6 +560,9 @@ function wire() {
     state.loadH = FIXED_LOAD_START.h;
     state.loadM = FIXED_LOAD_START.m;
     state.loadAP = FIXED_LOAD_START.ap;
+
+    // enforce auto-break for all shifts before calc
+    state.shifts.forEach(s => { s.breakMin = computeAutoBreakForShift(s); });
 
     saveState();
 
@@ -520,6 +583,9 @@ function wire() {
     state.loadH = FIXED_LOAD_START.h;
     state.loadM = FIXED_LOAD_START.m;
     state.loadAP = FIXED_LOAD_START.ap;
+
+    // enforce auto-break
+    state.shifts.forEach(s => { s.breakMin = computeAutoBreakForShift(s); });
 
     saveState();
     render();
@@ -546,6 +612,9 @@ function init() {
   state.loadH = FIXED_LOAD_START.h;
   state.loadM = FIXED_LOAD_START.m;
   state.loadAP = FIXED_LOAD_START.ap;
+
+  // enforce auto-break on startup
+  state.shifts.forEach(s => { s.breakMin = computeAutoBreakForShift(s); });
 
   render();
 
