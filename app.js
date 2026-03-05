@@ -4,6 +4,7 @@
 // - Weekdays: +25% after loadingStart (FIXED 6:30 PM)
 // - Saturday: +25% ALL DAY
 // - Sunday: +50% ALL DAY
+// - SPECIAL RULE (NEW): 11:01 PM – 11:59 PM is ALWAYS +50% loading (any day)
 // - DM = Yes → different base rate ($30.3329) for that shift/day (silent; not shown in UI)
 // - Break is FULLY AUTO (NO MANUAL OVERRIDE):
 //      ≤ 300 min -> 0
@@ -44,6 +45,16 @@ const DM_BASE_RATE = 30.3329;
 
 // FIXED loading start time: 6:30 PM (weekdays only)
 const FIXED_LOAD_START = { h: 6, m: 30, ap: "PM" };
+
+// --- Late-night rule: 11:01 PM to 11:59 PM is ALWAYS +50% (any day) ---
+const LATE50_START = 23 * 60 + 1; // 11:01 PM = 1381
+const DAY_END = 24 * 60;          // 1440
+
+function overlapMins(a0, a1, b0, b1) {
+  const s = Math.max(a0, b0);
+  const e = Math.min(a1, b1);
+  return Math.max(0, e - s);
+}
 
 const $ = (id) => document.getElementById(id);
 
@@ -393,7 +404,8 @@ function calculateTotals() {
   }
 
   let totalNormalMins = 0;
-  let totalLoadingMins = 0;
+  let totalLoading25Mins = 0;
+  let totalLoading50Mins = 0;
 
   let totalNormalPay = 0;
   let totalLoadingPay = 0;
@@ -403,7 +415,7 @@ function calculateTotals() {
   for (let i = 0; i < state.shifts.length; i++) {
     const s = state.shifts[i];
 
-    // enforce auto-break at calculation time (just in case)
+    // enforce auto-break at calculation time
     s.breakMin = computeAutoBreakForShift(s);
 
     const start = toMinutes12(s.sh, s.sm, s.sap);
@@ -416,24 +428,46 @@ function calculateTotals() {
     if (end < start) end += 1440; // overnight
 
     const { isSaturday, isSunday, isWeekend } = dayFlags(s.name);
-    const loadingPct = isSunday ? SUN_LOADING_PCT : (isSaturday ? SAT_LOADING_PCT : WEEKDAY_LOADING_PCT);
 
     const effectiveBaseRate =
       (String(s.didDM || "").toLowerCase() === "yes") ? DM_BASE_RATE : baseRateUI;
 
-    let normalM = 0, loadingM = 0;
+    let normalM = 0;
+    let loading25M = 0;
+    let loading50M = 0;
+
+    function addNonLateMinutes(a, b) {
+      if (b <= a) return;
+
+      // Weekend base rules (but late window handled separately)
+      if (isWeekend) {
+        if (isSunday) {
+          // Sunday is +50% all day
+          loading50M += (b - a);
+        } else {
+          // Saturday is +25% all day
+          loading25M += (b - a);
+        }
+        return;
+      }
+
+      // Weekdays: split by 6:30 PM into normal vs +25% loading
+      const split = splitByLoading(a, b, loadStart);
+      normalM += split.normal;
+      loading25M += split.loading;
+    }
 
     function processSegment(segStart, segEnd, dayOffset) {
       const a = segStart - dayOffset;
       const b = segEnd - dayOffset;
 
-      if (isWeekend) {
-        loadingM += (b - a);
-      } else {
-        const split = splitByLoading(a, b, loadStart);
-        normalM += split.normal;
-        loadingM += split.loading;
-      }
+      // Late window: [11:01 PM, 12:00 AM) => [1381, 1440)
+      const lateM = overlapMins(a, b, LATE50_START, DAY_END);
+      loading50M += lateM;
+
+      // Everything before 11:01 PM
+      const beforeLateEnd = Math.min(b, LATE50_START);
+      addNonLateMinutes(a, beforeLateEnd);
     }
 
     if (end <= 1440) {
@@ -443,27 +477,52 @@ function calculateTotals() {
       processSegment(1440, end, 1440);
     }
 
+    // --- Apply break deduction ---
     const breakMin = Math.max(0, Number(s.breakMin || 0));
+
     if (isWeekend) {
-      loadingM = Math.max(0, loadingM - breakMin);
+      // weekend: break comes out of loading (prefer removing from 25% first)
+      if (!isSunday) {
+        const take25 = Math.min(loading25M, breakMin);
+        loading25M -= take25;
+        const rem = breakMin - take25;
+        if (rem > 0) loading50M = Math.max(0, loading50M - rem);
+      } else {
+        // Sunday: all 50%
+        loading50M = Math.max(0, loading50M - breakMin);
+      }
     } else {
+      // weekdays: break goes to normal or loading depending on selection
       if (s.breakBeforeLoading === "yes") {
         normalM = Math.max(0, normalM - breakMin);
       } else {
-        loadingM = Math.max(0, loadingM - breakMin);
+        // deduct from loading (prefer removing from 25% first)
+        const take25 = Math.min(loading25M, breakMin);
+        loading25M -= take25;
+        const rem = breakMin - take25;
+        if (rem > 0) loading50M = Math.max(0, loading50M - rem);
       }
     }
 
-    totalNormalMins += normalM;
-    totalLoadingMins += loadingM;
+    const loadingM = loading25M + loading50M;
 
-    const shiftLoadingRate = effectiveBaseRate * (1 + loadingPct);
+    totalNormalMins += normalM;
+    totalLoading25Mins += loading25M;
+    totalLoading50Mins += loading50M;
+
+    // --- Pay ---
+    const loading25Rate = effectiveBaseRate * 1.25;
+    const loading50Rate = effectiveBaseRate * 1.5;
+
     totalNormalPay += (normalM / 60) * effectiveBaseRate;
-    totalLoadingPay += (loadingM / 60) * shiftLoadingRate;
+    totalLoadingPay += (loading25M / 60) * loading25Rate;
+    totalLoadingPay += (loading50M / 60) * loading50Rate;
 
     perShift.push({
       name: s.name || `Shift ${i+1}`,
       normalMins: normalM,
+      loading25Mins: loading25M,
+      loading50Mins: loading50M,
       loadingMins: loadingM,
       totalMins: normalM + loadingM,
       breakMin
@@ -478,8 +537,8 @@ function calculateTotals() {
     ok:true,
     baseRate: baseRateUI,
     normalMins: totalNormalMins,
-    loadingMins: totalLoadingMins,
-    totalMins: totalNormalMins + totalLoadingMins,
+    loadingMins: totalLoading25Mins + totalLoading50Mins,
+    totalMins: totalNormalMins + totalLoading25Mins + totalLoading50Mins,
     normalPay,
     loadingPay,
     totalPay,
@@ -512,7 +571,9 @@ function updateSummary(out) {
 
   if (el.sumLoadingRate) {
     el.sumLoadingRate.innerHTML =
-      `<span style="opacity:.75;font-size:.9em;font-weight:400;">Loading starts from 6:30 PM on Weekdays</span>`;
+      `<span style="opacity:.75;font-size:.9em;font-weight:400;">
+        Weekdays: +25% after 6:30 PM • All days: +50% from 11:01–11:59 PM
+      </span>`;
   }
 }
 
